@@ -1,4 +1,4 @@
-(ns paredit.core
+(ns lt.plugins.paredit
   (:require [lt.object :as object]
             [lt.objs.editor :as editor]
             [lt.objs.editor.pool :as pool]
