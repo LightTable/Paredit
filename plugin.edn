@@ -1,5 +1,6 @@
 {:name "Paredit"
- :author "Chris Granger"
- :source "https://github.com/Kodowa/LightTable-Paredit"
+ :version "0.0.1"
+ :author "Kodowa"
+ :source "https://github.com/LightTable/Paredit"
  :desc "Paredit integration for Light Table"
  :behaviors "paredit.behaviors"}
