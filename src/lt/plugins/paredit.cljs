@@ -264,6 +264,22 @@
                   :to (editor/adjust-loc end 1)})
       orig)))
 
+(defn unwrap [{:keys [ed loc] :as orig} type]
+  (let [[start end] (form-boundary ed loc (when type
+                                            (re-pattern (str "[\\" type "]"))))]
+    (if (and start end)
+      ;; We delete the end pair first because deleting it wouldn't affect
+      ;; the start pair's position.
+      ;; The opposite is not true when they are on the same line.
+      (update-in orig [:edits] conj
+                 {:type :delete
+                  :from end
+                  :to (editor/adjust-loc end 1)}
+                 {:type :delete
+                  :from start
+                  :to (editor/adjust-loc start 1)})
+      orig)))
+
 
 (defn batched-edits [{:keys [edits ed]}]
   (editor/operation ed (fn []
@@ -366,6 +382,16 @@
                             ))
                       )})
 
+(cmd/command {:command :paredit.unwrap.parent
+              :desc "Paredit: Unwrap parent. e.g. (a b c) => a b c"
+              :exec (fn [type]
+                      (when-let [ed (pool/last-active)]
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (ed->info ed)
+                            (unwrap type)
+                            (batched-edits))))})
 
 (cmd/command {:command :paredit.select.clear
               :desc "Paredit: Clear selection and return cursor"
