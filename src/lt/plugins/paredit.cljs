@@ -145,6 +145,48 @@
                                 :for (re-pattern (str "[\\" (opposites c) "]"))}))]
     [start end]))
 
+(defn inner-form-boundary-right
+  "Finds a form in ed which ends to the left of loc
+
+  If loc is the last character of a selection, finds a child form on the right of the selection
+
+  Returns [start end] where start and end are editor locations"
+
+  [ed loc]
+
+  (let [[c end] (paired-scan {:dir :left
+                              :ed ed
+                              :loc (move-loc ed loc :left)
+                              :for form-end})
+        [c start] (if-not c
+                    [nil nil]
+                    (paired-scan {:dir :left
+                                  :ed ed
+                                  :loc (move-loc ed end :left)
+                                  :for (re-pattern (str "[\\" (opposites c) "]"))}))]
+    [start end]))
+
+(defn inner-form-boundary-left
+  "Finds a form in ed which starts to the right of loc
+
+  If loc is the first character of a selection, finds a child form on the left of the selection
+
+  Returns [start end] where start and end are editor locations"
+
+  [ed loc]
+
+  (let [[c start] (paired-scan {:dir :right
+                                :ed ed
+                                :loc (move-loc ed loc :right)
+                                :for form-start})
+        [c end] (if-not c
+                  [nil nil]
+                  (paired-scan {:dir :right
+                                :ed ed
+                                :loc (move-loc ed start :right)
+                                :for (re-pattern (str "[\\" (opposites c) "]"))}))]
+    [start end]))
+
 (defn escaped-paired-scan [ed loc thing dir]
   (let [[c end] (paired-scan {:dir dir
                               :ed ed
@@ -252,6 +294,41 @@
                  {:type :format
                   :from format-side
                   :to neue-point})
+      orig)))
+
+(defn inner-form-boundary
+  "Given an editor ed which has a selection, finds a child form within the expression
+
+  Returns [start end] where start and end are editor locations for the child form-boundary
+
+  dir should be :left or :right, and determines if a child form on the left or the right should be returned
+
+  e.g if the selection is: (my-func [args] (function args))
+  (inner-form-boundary ed :left) => start and end locations of \"[args]\"
+  (inner-form-boundary ed :right) => stat and end locations of \"(function args)\""
+
+  [ed dir]
+
+  (let [{:keys [from to]} (editor/selection-bounds ed)]
+    (if (= dir :left)
+      (inner-form-boundary-left ed from)
+      (inner-form-boundary-right ed (move-loc ed to :left)))))
+
+(defn select-inner
+  "If editor ed has a selection, selects a child form, on either the left or right of the expression.
+
+  dir should be :left or :right
+
+  See: inner-form-boundary"
+
+  [{ed :ed :as orig} dir]
+
+  (let [[start end] (inner-form-boundary ed dir)]
+    (if (and start end)
+      (update-in orig [:edits] conj
+                 {:type :cursor
+                  :from start
+                  :to (editor/adjust-loc end 1)})
       orig)))
 
 (defn select [{:keys [ed loc] :as orig} type]
@@ -378,6 +455,32 @@
                           (object/merge! ed {::orig-pos (editor/->cursor ed)}))
                         (-> (ed->info ed)
                             (select type)
+                            (batched-edits)
+                            ))
+                      )})
+
+(cmd/command {:command :paredit.select.child.left
+              :desc "Paredit: Select child expression on left"
+              :exec (fn []
+                      (when-let [ed (pool/last-active)]
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (ed->info ed)
+                            (select-inner :left)
+                            (batched-edits)
+                            ))
+                      )})
+
+(cmd/command {:command :paredit.select.child.right
+              :desc "Paredit: Select child expression on right"
+              :exec (fn []
+                      (when-let [ed (pool/last-active)]
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (ed->info ed)
+                            (select-inner :right)
                             (batched-edits)
                             ))
                       )})
