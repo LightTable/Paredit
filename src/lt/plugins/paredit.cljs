@@ -148,7 +148,9 @@
 (defn inner-form-boundary-right
   "Finds a form in ed which ends to the left of loc
 
-  If loc is the last character of a selection, finds a child form on the right of the selection"
+  If loc is the last character of a selection, finds a child form on the right of the selection
+
+  Returns [start end] where start and end are editor locations"
 
   [ed loc]
 
@@ -167,7 +169,9 @@
 (defn inner-form-boundary-left
   "Finds a form in ed which starts to the right of loc
 
-  If loc is the first character of a selection, finds a child form on the left of the selection"
+  If loc is the first character of a selection, finds a child form on the left of the selection
+
+  Returns [start end] where start and end are editor locations"
 
   [ed loc]
 
@@ -295,11 +299,13 @@
 (defn inner-form-boundary
   "Given an editor ed which has a selection, finds a child form within the expression
 
+  Returns [start end] where start and end are editor locations for the child form-boundary
+
   dir should be :left or :right, and determines if a child form on the left or the right should be returned
 
   e.g if the selection is: (my-func [args] (function args))
-  (inner-form-boundary ed :left) => [args]
-  (inner-form-boundary ed :right) => (function args)"
+  (inner-form-boundary ed :left) => start and end locations of \"[args]\"
+  (inner-form-boundary ed :right) => stat and end locations of \"(function args)\""
 
   [ed dir]
 
