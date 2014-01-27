@@ -163,7 +163,6 @@
 (defn token-bounds [ed loc dir]
   (let [[c end] (paired-scan {:dir dir
                               :ed ed
-                              :allow-end? true
                               :loc (editor/adjust-loc loc (if (= dir :left) -1 1))
                               :for #"[\s\)\}\]\"\(\{\[]"})]
     (if (= dir :left)
