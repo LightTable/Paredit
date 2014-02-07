@@ -102,7 +102,7 @@
                           (editor/line ed (:line next-loc))
                           line)
               valid? (not (string|comment? ed cur allow-strings?))
-              stackable? (not (string|comment? ed cur))
+              stackable? (not (string|comment? ed cur nil))
               ]
           (cond
            (and allow-end?
@@ -174,7 +174,7 @@
   (scan (assoc opts :regex #"\S")))
 
 (defn anchored-move [ed loc anchor-side dir]
-  (let [[start end] (form-boundary ed loc)
+  (let [[start end] (form-boundary ed loc nil)
         ends (if (= dir :left)
                form-start
                form-end)
@@ -191,7 +191,7 @@
                 (opposites cur) (let [right? (= dir :right)
                                       bounds (form-boundary ed (if right?
                                                                  (move-loc ed i dir)
-                                                                 i))]
+                                                                 i) nil)]
                                   (if right?
                                     [(first bounds) (editor/adjust-loc (second bounds) 1)]
                                     bounds))
