@@ -56,7 +56,7 @@
 (defn within-range [[start end] cur]
   (>= end (:line cur) start))
 
-(defn scan [{:keys [dir ed loc regex] :as opts}]
+(defn scan [{:keys [dir ed loc regex skip] :or {skip (fn [ed loc] false)} :as opts}]
   (let [search-range [(- (:line loc) 100) (+ (:line loc) 100)]]
     (loop [cur loc
            line (editor/line ed (:line loc))]
@@ -69,7 +69,7 @@
               next-line (if (not= (:line cur) (:line next-loc))
                           (editor/line ed (:line next-loc))
                           line)]
-          (if (and ch (re-seq regex ch))
+          (if (and ch (re-seq regex ch) (not (skip ed cur)))
             [ch cur]
             (recur next-loc next-line)))))))
 
@@ -280,6 +280,44 @@
                   :to (editor/adjust-loc start 1)})
       orig)))
 
+(defn move-up [{:keys [ed loc] :as orig} dir]
+  (let [[start end] (form-boundary ed loc nil)
+        dest (if (= dir :left) start (editor/adjust-loc end 1))]
+    (if (and start end)
+      (update-in orig [:edits] conj
+                 {:type :cursor
+                  :from dest
+                  :to dest})
+      orig)))
+
+(defn in-string? [ed loc]
+  (and (string|comment? ed loc false)
+       (string|comment? ed (editor/adjust-loc loc -1) false)
+       (not= {:line 0, :ch 0} loc)))
+
+(defn move-down [{:keys [ed loc] :as orig} dir]
+  (let [backward? (= dir :left)
+        [parent-start parent-end] (form-boundary ed loc nil)
+        limit (when (and parent-start parent-end)
+                (if backward? parent-start parent-end))
+        [ends adjust-scan adjust-final] (if backward?
+                                          [form-end -1 0]
+                                          [form-start 0 1])
+        [ch cur] (scan {:ed ed
+                        :loc (editor/adjust-loc loc adjust-scan)
+                        :dir dir
+                        :regex ends
+                        :skip in-string?})
+        in-bounds? (if limit
+                     (if backward? (loc>loc cur limit) (loc>loc limit cur))
+                     cur)
+        dest (when in-bounds? (editor/adjust-loc cur adjust-final))]
+    (if (and dest (not (in-string? ed dest)))
+      (update-in orig [:edits] conj
+                 {:type :cursor
+                  :from dest
+                  :to dest})
+      orig)))
 
 (defn batched-edits [{:keys [edits ed]}]
   (editor/operation ed (fn []
@@ -382,6 +420,50 @@
                             ))
                       )})
 
+(cmd/command {:command :paredit.move.up.backward
+              :desc "Paredit: Move up out of the current form to its beginning"
+              :exec (fn [type]
+                      (when-let [ed (pool/last-active)]
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (ed->info ed)
+                            (move-up :left)
+                            (batched-edits))))})
+
+(cmd/command {:command :paredit.move.up.forward
+              :desc "Paredit: Move up out of the current form to its end"
+              :exec (fn [type]
+                      (when-let [ed (pool/last-active)]
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (ed->info ed)
+                            (move-up :right)
+                            (batched-edits))))})
+
+(cmd/command {:command :paredit.move.down.forward
+              :desc "Paredit: Move down into the next form"
+              :exec (fn []
+                      (when-let [ed (pool/last-active)]
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (ed->info ed)
+                            (move-down :right)
+                            (batched-edits))))})
+
+(cmd/command {:command :paredit.move.down.backward
+              :desc "Paredit: Move down into the previous form"
+              :exec (fn []
+                      (when-let [ed (pool/last-active)]
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (ed->info ed)
+                            (move-down :left)
+                            (batched-edits))))})
+
 (cmd/command {:command :paredit.unwrap.parent
               :desc "Paredit: Unwrap parent. e.g. (a b c) => a b c"
               :exec (fn [type]
@@ -403,6 +485,3 @@
                           (object/merge! ed {::orig-pos nil}))
                         )
                       )})
-
-
-
