@@ -18,6 +18,9 @@
 (def form-start #"[\{\(\[]")
 (def form-end #"[\}\)\]]")
 
+(defn get-ch [ed loc]
+  (get (editor/line ed (:line loc)) (:ch loc)))
+
 (defn end-loc [ed]
   (let [last-line (editor/last-line ed)]
     {:line last-line
@@ -319,6 +322,72 @@
                   :to dest})
       orig)))
 
+(defn delete [{:keys [ed loc] :as orig} dir]
+  (let [backward? (= dir :left)
+        forward?  (= dir :right)
+        ;; forward: ab|cd    backward dc|ba
+        a (if forward? (move-loc ed (move-loc ed loc :left) :left) (move-loc ed loc :right))
+        b (if forward? (move-loc ed loc :left) loc)
+        c (if forward? loc (move-loc ed loc :left))
+        d (move-loc ed c dir)
+        e (move-loc ed d dir)
+        a-ch (get-ch ed a)
+        b-ch (get-ch ed b)
+        c-ch (get-ch ed c)
+        d-ch (get-ch ed d)
+        move-in-loc (if forward? d c)
+        [del-normal-start del-normal-end] (if forward? [c d] [b c])
+        [del-both-start del-both-end]     (if forward? [b d] [c a])
+        [enter-delims exit-delims] (if forward?
+                                     [form-start form-end]
+                                     [form-end form-start])
+        normal-delete (update-in orig [:edits] conj
+                                 {:type :delete
+                                  :from del-normal-start
+                                  :to del-normal-end})
+        move-in (update-in orig [:edits] conj
+                           {:type :cursor
+                            :from move-in-loc
+                            :to move-in-loc})
+        delete-both (update-in orig [:edits] conj
+                               {:type :delete
+                                :from del-both-start
+                                :to del-both-end})]
+    (cond
+     (not c) orig
+     (not c-ch) normal-delete
+     (and (= "\"" c-ch)
+          (= "\\" b-ch)
+          forward?) delete-both ; delete escaped quote from within
+     (and (= "\\" c-ch)
+          (= "\"" b-ch)
+          backward?) delete-both ; backspace escaped quote from within
+     (and (= "\"" c-ch)
+          (or (in-string? ed d)
+              (= "\"" d-ch))) move-in ; enter string
+     (and (= "\"" c-ch)
+          (= "\"" b-ch)
+          (not= "\\" a-ch)
+          forward?) delete-both ; delete empty string from within
+     (and (= "\"" c-ch)
+          (= "\"" b-ch)
+          (not= "\\" d-ch)
+          backward?) delete-both ; backspace empty string from within
+     (and (= "\"" c-ch)
+          (= "\"" b-ch)
+          (= "\\" a-ch)) orig ; stay at end of string near escaped quote
+     (and (= "\"" c-ch)
+          (not= "\"" b-ch)) orig ; stay at end of string
+     (in-string? ed c) normal-delete
+     (re-find enter-delims c-ch) move-in
+     (and
+      (re-find exit-delims c-ch)
+      (= b-ch (opposites c-ch))) delete-both
+     (and
+      (re-find exit-delims c-ch)
+      (not= b-ch (opposites c-ch))) orig
+     :else normal-delete)))
+
 (defn batched-edits [{:keys [edits ed]}]
   (editor/operation ed (fn []
                          (doseq [e edits]
@@ -485,3 +554,25 @@
                           (object/merge! ed {::orig-pos nil}))
                         )
                       )})
+
+(cmd/command {:command :paredit.backspace
+              :desc "Paredit: Pair and quote aware backspace"
+              :exec (fn []
+                      (when-let [ed (pool/last-active)]
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (ed->info ed)
+                            (delete :left)
+                            (batched-edits))))})
+
+(cmd/command {:command :paredit.delete
+              :desc "Paredit: Pair and quote aware delete"
+              :exec (fn []
+                      (when-let [ed (pool/last-active)]
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (ed->info ed)
+                            (delete :right)
+                            (batched-edits))))})
