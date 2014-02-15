@@ -86,6 +86,12 @@
                                        true)
        :else false))))
 
+(defn comment? [ed cur]
+  (let [type (editor/->token-type ed (editor/adjust-loc cur 1))]
+    (and type
+         (not (str-contains? type "comment-form"))
+         (str-contains? type "comment"))))
+
 (defn paired-scan [{:keys [dir ed loc for negation allow-end? allow-strings? only-for?] :as opts}]
   (let [[stack-chars stack-ends] (if (= dir :left)
                                    [form-end form-start]
@@ -294,9 +300,8 @@
       orig)))
 
 (defn in-string? [ed loc]
-  (and (string|comment? ed loc false)
-       (string|comment? ed (editor/adjust-loc loc -1) false)
-       (not= {:line 0, :ch 0} loc)))
+  (and (not (nil? (get-ch ed loc)))
+       (string|comment? ed loc false)))
 
 (defn move-down [{:keys [ed loc] :as orig} dir]
   (let [backward? (= dir :left)
@@ -322,71 +327,117 @@
                   :to dest})
       orig)))
 
+(defn at-end-of-line? [ed loc]
+  (= (:ch loc) (editor/line-length ed (:line loc))))
+
 (defn delete [{:keys [ed loc] :as orig} dir]
-  (let [backward? (= dir :left)
-        forward?  (= dir :right)
-        ;; forward: ab|cd    backward dc|ba
-        a (if forward? (move-loc ed (move-loc ed loc :left) :left) (move-loc ed loc :right))
-        b (if forward? (move-loc ed loc :left) loc)
-        c (if forward? loc (move-loc ed loc :left))
-        d (move-loc ed c dir)
-        e (move-loc ed d dir)
-        a-ch (get-ch ed a)
-        b-ch (get-ch ed b)
-        c-ch (get-ch ed c)
-        d-ch (get-ch ed d)
-        move-in-loc (if forward? d c)
-        [del-normal-start del-normal-end] (if forward? [c d] [b c])
-        [del-both-start del-both-end]     (if forward? [b d] [c a])
-        [enter-delims exit-delims] (if forward?
-                                     [form-start form-end]
-                                     [form-end form-start])
-        normal-delete (update-in orig [:edits] conj
-                                 {:type :delete
-                                  :from del-normal-start
-                                  :to del-normal-end})
-        move-in (update-in orig [:edits] conj
-                           {:type :cursor
-                            :from move-in-loc
-                            :to move-in-loc})
-        delete-both (update-in orig [:edits] conj
-                               {:type :delete
-                                :from del-both-start
-                                :to del-both-end})]
-    (cond
-     (not c) orig
-     (not c-ch) normal-delete
-     (and (= "\"" c-ch)
-          (= "\\" b-ch)
-          forward?) delete-both ; delete escaped quote from within
-     (and (= "\\" c-ch)
-          (= "\"" b-ch)
-          backward?) delete-both ; backspace escaped quote from within
-     (and (= "\"" c-ch)
-          (or (in-string? ed d)
-              (= "\"" d-ch))) move-in ; enter string
-     (and (= "\"" c-ch)
-          (= "\"" b-ch)
-          (not= "\\" a-ch)
-          forward?) delete-both ; delete empty string from within
-     (and (= "\"" c-ch)
-          (= "\"" b-ch)
-          (not= "\\" d-ch)
-          backward?) delete-both ; backspace empty string from within
-     (and (= "\"" c-ch)
-          (= "\"" b-ch)
-          (= "\\" a-ch)) orig ; stay at end of string near escaped quote
-     (and (= "\"" c-ch)
-          (not= "\"" b-ch)) orig ; stay at end of string
-     (in-string? ed c) normal-delete
-     (re-find enter-delims c-ch) move-in
-     (and
-      (re-find exit-delims c-ch)
-      (= b-ch (opposites c-ch))) delete-both
-     (and
-      (re-find exit-delims c-ch)
-      (not= b-ch (opposites c-ch))) orig
-     :else normal-delete)))
+  (if (editor/selection? ed)
+    (let [bounds (editor/selection-bounds ed)]
+      (update-in orig [:edits] conj
+                 {:type :delete
+                  :from (bounds :from)
+                  :to (bounds :to)}))
+    (let [backward? (= dir :left)
+          forward?  (= dir :right)
+          ;; forward: ab|cde    backward: edc|ba
+          a (if forward? (move-loc ed (move-loc ed loc :left) :left) (move-loc ed loc :right))
+          b (if forward? (move-loc ed loc :left) loc)
+          c (if forward? loc (move-loc ed loc :left))
+          d (move-loc ed c dir)
+          e (move-loc ed d dir)
+          a-ch (get-ch ed a)
+          b-ch (get-ch ed b)
+          c-ch (get-ch ed c)
+          d-ch (get-ch ed d)
+          adjust (fn [ed loc n alt] (if (= n (- (editor/line-length ed (:line loc)) (loc :ch)))
+                                      (assoc loc :ch (+ n (:ch loc)))
+                                      alt))
+          [del-normal-start del-normal-end] (if forward?
+                                              [c (adjust ed c 1 d)]
+                                              [c b])
+          [del-both-start del-both-end]     (if forward?
+                                              [b (adjust ed c 1 d)]
+                                              [(adjust ed b 1 a) c])
+          [del-two-start del-two-end]       (if forward?
+                                              [c (adjust ed c 2 e)]
+                                              [d b])
+          [enter-delims exit-delims]        (if forward?
+                                              [form-start form-end]
+                                              [form-end form-start])
+          move-in-loc (if forward? d c)
+          normal-delete (update-in orig [:edits] conj
+                                   {:type :delete
+                                    :from del-normal-start
+                                    :to del-normal-end})
+          line-break    (update-in orig [:edits] conj
+                                   {:type :delete
+                                    :from {:line (:line c), :ch (inc (:ch c))}
+                                    :to b})
+          move-in       (update-in orig [:edits] conj
+                                   {:type :cursor
+                                    :from move-in-loc
+                                    :to move-in-loc})
+          delete-both   (update-in orig [:edits] conj
+                                   {:type :delete
+                                    :from del-both-start
+                                    :to del-both-end})
+          delete-two    (update-in orig [:edits] conj
+                                   {:type :delete
+                                    :from del-two-start
+                                    :to del-two-end})]
+      (cond
+       (not c)                        orig          ; at beginning of file
+       (and forward?
+            (at-end-of-line? ed c)
+            (comment? ed c)
+            (not (comment? ed d)))    orig          ; don't bring code onto comment
+       (not c-ch)                     normal-delete ; at end of line
+       (and backward?
+            (= 0 (:ch loc))
+            (comment? ed c)
+            (not (comment? ed b)))    orig          ; don't carry code up behind comment
+       (and backward?
+            (= 0 (:ch loc)))          line-break    ; backspace at beginning of line
+       (and (= "\"" c-ch)
+            (not (in-string? ed d))
+            (not (in-string? ed b))
+            forward?)                 move-in       ; enter string in odd case |" foo"
+       (and (= "\"" c-ch)
+            (not (in-string? ed d))
+            (or (not (= "\"" b-ch))
+                (= "\\" a-ch)))       orig          ; stay at end of string
+       (and (= "\"" c-ch)
+            (not (in-string? ed b)))  move-in       ; enter string
+       (and (in-string? ed c)
+            (in-string? ed d)
+            (= "\\" b-ch)
+            forward?)                 delete-both   ; delete escaped char from within
+       (and (in-string? ed a)
+            (in-string? ed b)
+            (= "\\" c-ch)
+            backward?)                delete-both   ; backspace escaped char from within
+       (and (in-string? ed c)
+            (= "\\" d-ch)
+            backward?)                delete-two    ; backspace entire escaped char
+       (and (in-string? ed d)
+            (in-string? ed e)
+            (= "\\" c-ch)
+            forward?)                 delete-two    ; delete entire escaped char
+       (and (= "\"" c-ch)
+            (= "\"" b-ch)
+            (not= "\\" a-ch)
+            forward?)                 delete-both   ; delete empty string from within
+       (and (= "\"" c-ch)
+            (= "\"" b-ch)
+            (not= "\\" d-ch)
+            backward?)                delete-both   ; backspace empty string from within
+       (in-string? ed c)              normal-delete ; normal del/bksp within string
+       (re-find enter-delims c-ch)    move-in       ; enter
+       (and (re-find exit-delims c-ch)
+            (= b-ch (opposites c-ch)))delete-both   ; del both from within
+       (and (re-find exit-delims c-ch)
+            (not= b-ch (opposites c-ch))) orig      ; stay
+       :else                          normal-delete))))
 
 (defn batched-edits [{:keys [edits ed]}]
   (editor/operation ed (fn []
