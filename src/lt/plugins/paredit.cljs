@@ -319,6 +319,38 @@
                   :to dest})
       orig)))
 
+(defn seek-top [ed loc]
+  (let [pars (re-pattern "\\(|\\{|\\[")]
+    (loop [loc loc]
+      (let [cur (second (scan {:ed ed
+                               :loc loc
+                               :dir :left
+                               :regex pars
+                               :skip in-string?}))
+            adj (editor/adjust-loc cur -1)]
+        (if (or (zero? (:ch cur))
+                (nil? (:ch cur)))
+          cur
+          (recur adj))))))
+
+(defn seek-bottom [ed loc]
+  (let [adj->top (fn [pos] (editor/adjust-loc pos 1))
+        start (seek-top ed loc)
+        end (second (form-boundary ed (adj->top start) nil))]
+    (adj->top end)))
+
+(defn move-top [{:keys [ed loc] :as orig} dir]
+  (let [[start end] (form-boundary ed loc nil)]
+    (if (and start end)
+      (let [dest (if (= dir :right)
+                   (seek-bottom ed loc)
+                   (seek-top ed loc))]
+        (update-in orig [:edits] conj
+                   {:type :cursor
+                    :from dest
+                    :to dest}))
+      orig)))
+
 (defn batched-edits [{:keys [edits ed]}]
   (editor/operation ed (fn []
                          (doseq [e edits]
@@ -462,6 +494,28 @@
                           (object/merge! ed {::orig-pos (editor/->cursor ed)}))
                         (-> (ed->info ed)
                             (move-down :left)
+                            (batched-edits))))})
+
+(cmd/command {:command :paredit.move.top.backward
+              :desc "Paredit: Move backward to top level"
+              :exec (fn [type]
+                      (when-let [ed (pool/last-active)]
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (ed->info ed)
+                            (move-top :left)
+                            (batched-edits))))})
+
+(cmd/command {:command :paredit.move.top.forward
+              :desc "Paredit: Move forward to top level"
+              :exec (fn [type]
+                      (when-let [ed (pool/last-active)]
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (ed->info ed)
+                            (move-top :right)
                             (batched-edits))))})
 
 (cmd/command {:command :paredit.unwrap.parent
